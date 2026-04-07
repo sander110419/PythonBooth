@@ -26,8 +26,10 @@
 - 2026-04-07: Removed live-view polling from the UI and camera manager so the app only polls for completed captures, then updates the selected image and timeline.
 - 2026-04-07: Reworked the UI into a preview-first layout with a compact top action bar, near-fullscreen selected-image viewer, slim timeline strip, and an options menu/dialog for backend, naming, reconnect, hot-folder, simulator, and SDK settings.
 - 2026-04-07: Verified the new UI with `python -m compileall src main.py tests`, `QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m pytest -q` -> `6 passed`, offscreen app launch, and a simulator capture smoke test after opening the options dialog (`photos=1`).
+- 2026-04-07: Added bundled Canon EDSDK assets under `canon-sdk/` from `/home/sander/Downloads/edsdk/`, including Linux `x86_64` `libEDSDK.so` and Windows DLL/lib files.
+- 2026-04-07: Verified the Canon loader resolves the bundled SDK and that startup now reaches `No Canon camera detected` instead of `Canon SDK not found` when no camera is attached.
 
 ## Remaining limitation
 
 - Canon tethering code is implemented and reconnect-safe, but it could not be validated against a real connected camera in this environment.
-- Linux Canon testing is also limited by the absence of a local x86_64 `libEDSDK.so` binary in the workspace; the current machine only had the Windows DLLs and ARM Linux SDK files in the reference project.
+- Real Canon capture still needs a connected camera to validate end-to-end behavior even though the required bundled SDK binaries are now present.

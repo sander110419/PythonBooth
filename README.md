@@ -41,9 +41,10 @@ Useful shortcuts:
 
 ## Canon SDK notes
 
+- Canon EDSDK assets are now bundled in this repo under `canon-sdk/`, sourced from the local packages in `/home/sander/Downloads/edsdk/`.
 - The Canon backend is written against EDSDK and searches `EDSDK_LIBRARY_PATH`, a local `canon-sdk/` folder, or the sibling reference project at `/home/sander/Dev/Photobooth-software/canon-sdk`.
 - Windows support expects Canon DLLs such as `EDSDK.dll`.
-- Linux support expects `libEDSDK.so`. In this environment there was no x86_64 Linux EDSDK binary available, so Canon startup was verified only for graceful failure and reconnect behavior, not real camera polling.
+- Linux support expects `libEDSDK.so`, and the bundled SDK now includes the required `x86_64` binary. Canon startup has been verified to resolve the bundled library and fail gracefully to `No Canon camera detected` when no camera is attached.
 
 ## Development
 
