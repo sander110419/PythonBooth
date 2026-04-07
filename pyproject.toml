@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pythonbooth"
+version = "0.1.0"
+description = "Professional PyQt6 photo tethering and session management application"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [
+  { name = "OpenAI Codex" }
+]
+dependencies = [
+  "numpy>=1.26",
+  "opencv-python>=4.10",
+  "platformdirs>=4.3",
+  "PyQt6>=6.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-qt>=4.4",
+]
+
+[project.scripts]
+pythonbooth = "pythonbooth.main:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
