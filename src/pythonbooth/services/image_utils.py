@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt
-from PyQt6.QtGui import QColor, QImage, QPainter, QPixmap
+from PyQt6.QtGui import QImage
 
 
 SUPPORTED_IMPORT_SUFFIXES = {
@@ -60,7 +60,7 @@ def build_thumbnail(source_path: Path, thumb_path: Path, size: QSize = QSize(220
     image = QImage(str(source_path))
     if image.isNull():
         image = placeholder_image(size, label=source_path.suffix.upper().lstrip(".") or "FILE")
-    thumb = QPixmap.fromImage(image).scaled(
+    thumb = image.scaled(
         size,
         Qt.AspectRatioMode.KeepAspectRatio,
         Qt.TransformationMode.SmoothTransformation,
@@ -71,23 +71,18 @@ def build_thumbnail(source_path: Path, thumb_path: Path, size: QSize = QSize(220
 
 
 def placeholder_image(size: QSize, label: str = "RAW") -> QImage:
-    image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(QColor("#11151f"))
-    painter = QPainter(image)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.fillRect(image.rect(), QColor("#11151f"))
-    painter.setPen(QColor("#dbe4ff"))
-    painter.setBrush(QColor(255, 255, 255, 18))
-    inset = image.rect().adjusted(12, 12, -12, -12)
-    painter.drawRoundedRect(inset, 18, 18)
-    painter.setPen(QColor("#7fd6c2"))
-    font = painter.font()
-    font.setPointSize(max(14, image.height() // 7))
-    font.setBold(True)
-    painter.setFont(font)
-    painter.drawText(image.rect(), Qt.AlignmentFlag.AlignCenter, label)
-    painter.end()
-    return image
+    canvas = np.zeros((max(1, size.height()), max(1, size.width()), 3), dtype=np.uint8)
+    canvas[:, :] = (31, 21, 17)
+    cv2.rectangle(canvas, (12, 12), (canvas.shape[1] - 12, canvas.shape[0] - 12), (90, 214, 198), 2)
+    font_scale = max(0.6, min(canvas.shape[0], canvas.shape[1]) / 180.0)
+    thickness = max(1, int(round(font_scale * 2)))
+    text_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, font_scale, thickness)
+    origin = (
+        max(10, (canvas.shape[1] - text_size[0]) // 2),
+        max(text_size[1] + 10, (canvas.shape[0] + text_size[1]) // 2),
+    )
+    cv2.putText(canvas, label, origin, cv2.FONT_HERSHEY_DUPLEX, font_scale, (219, 228, 255), thickness, cv2.LINE_AA)
+    return qimage_from_bgr(canvas) or QImage()
 
 
 def encode_qimage_to_jpeg_bytes(image: QImage, quality: int = 90) -> bytes:

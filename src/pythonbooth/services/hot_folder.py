@@ -13,6 +13,7 @@ class HotFolderWatcher:
 
     def set_folder(self, folder: str | Path | None) -> None:
         self._folder = Path(folder).expanduser() if folder else None
+        self._seen.clear()
         self._pending.clear()
 
     def scan(self) -> list[Path]:

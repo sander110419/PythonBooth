@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..config import AppConfig, ConfigStore
-from ..models import CapturePayload, CameraStatus, PhotoRecord
+from ..models import CapturePayload, CameraStatus
 from ..services.camera_manager import CameraManager
 from ..services.hot_folder import HotFolderWatcher
 from ..services.library import SessionLibrary
@@ -46,7 +46,6 @@ class MainWindow(QMainWindow):
         self.config_store = config_store
         self.config = config
         self.secondary_windows: list[SecondaryDisplayWindow] = []
-        self.current_live_image = QImage()
         self.selected_photo_id = config.selected_photo_id or ""
 
         self.session_id = ""
@@ -65,6 +64,7 @@ class MainWindow(QMainWindow):
         self.resize(1680, 1020)
         self.setMinimumSize(1280, 820)
         self._build_ui()
+        self.selected_viewer.set_zoom_enabled(self.config.zoom_enabled)
         self._bind_shortcuts()
         self._bind_signals()
         self._refresh_timeline()
@@ -211,8 +211,6 @@ class MainWindow(QMainWindow):
 
         self.auto_reconnect_check = QCheckBox("Auto reconnect")
         self.auto_reconnect_check.setChecked(self.config.auto_reconnect)
-        self.show_live_check = QCheckBox("Show live view")
-        self.show_live_check.setChecked(self.config.show_live_view)
         self.hot_folder_check = QCheckBox("Enable hot folder import")
         self.hot_folder_check.setChecked(self.config.hot_folder_enabled)
         self.hot_folder_input = QLineEdit(self.config.hot_folder_path)
@@ -240,7 +238,6 @@ class MainWindow(QMainWindow):
         sdk_row_layout.addWidget(self.sdk_browse)
 
         form.addRow(self.auto_reconnect_check)
-        form.addRow(self.show_live_check)
         form.addRow(self.hot_folder_check)
         form.addRow("Hot folder", hot_row)
         form.addRow("Sim auto-capture", self.sim_capture_spin)
@@ -269,19 +266,6 @@ class MainWindow(QMainWindow):
         selected_layout.addWidget(self.selected_viewer, 1)
         splitter.addWidget(selected_card)
 
-        side_column = QWidget()
-        side_layout = QVBoxLayout(side_column)
-        side_layout.setContentsMargins(0, 0, 0, 0)
-        side_layout.setSpacing(18)
-
-        live_card = self._card()
-        live_layout = QVBoxLayout(live_card)
-        live_layout.addWidget(self._section_title("Live Tether"))
-        self.live_viewer = PhotoViewer()
-        self.live_viewer.set_display_mode("fit")
-        live_layout.addWidget(self.live_viewer, 1)
-        side_layout.addWidget(live_card, 2)
-
         detail_card = self._card()
         detail_layout = QFormLayout(detail_card)
         detail_layout.setSpacing(10)
@@ -291,11 +275,10 @@ class MainWindow(QMainWindow):
         self.selected_meta_label.setWordWrap(True)
         detail_layout.addRow("Session", self.session_stats_label)
         detail_layout.addRow("Selected", self.selected_meta_label)
-        side_layout.addWidget(detail_card, 1)
 
-        splitter.addWidget(side_column)
+        splitter.addWidget(detail_card)
         splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(1, 1)
         return splitter
 
     def _build_preview_toolbar(self) -> QWidget:
@@ -339,7 +322,6 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+N"), self, activated=self._start_new_session)
 
     def _bind_signals(self) -> None:
-        self.camera_manager.preview_updated.connect(self._on_preview_updated)
         self.camera_manager.status_updated.connect(self._apply_status)
         self.camera_manager.capture_ready.connect(self._on_capture_ready)
 
@@ -365,11 +347,11 @@ class MainWindow(QMainWindow):
             widget.textChanged.connect(self._update_filename_preview)
         self.hot_folder_check.toggled.connect(self._on_hot_folder_toggled)
         self.hot_folder_browse.clicked.connect(self._browse_hot_folder)
+        self.hot_folder_input.textChanged.connect(self._on_hot_folder_path_changed)
         self.sdk_browse.clicked.connect(self._browse_sdk_path)
         self.auto_reconnect_check.toggled.connect(self._push_runtime_options)
         self.sim_capture_spin.valueChanged.connect(self._push_runtime_options)
         self.sdk_path_input.textChanged.connect(self._push_runtime_options)
-        self.show_live_check.toggled.connect(self._toggle_live_view_visibility)
 
     def _apply_status(self, status: CameraStatus) -> None:
         self.camera_info_label.setText(status.message if not status.last_error else f"{status.message}\n{status.last_error}")
@@ -384,14 +366,6 @@ class MainWindow(QMainWindow):
         self.config.backend = str(backend_name)
         self.camera_manager.switch_backend(self.config.backend)
         self._update_filename_preview()
-
-    def _on_preview_updated(self, image: QImage) -> None:
-        self.current_live_image = image
-        if self.show_live_check.isChecked():
-            self.live_viewer.set_image(image)
-        if not self.selected_photo_id:
-            self.selected_viewer.set_image(image)
-            self._update_secondary_windows()
 
     def _on_capture_ready(self, capture: CapturePayload) -> None:
         record = self.session_library.add_capture(capture, self._build_filename)
@@ -434,9 +408,8 @@ class MainWindow(QMainWindow):
 
     def _update_selected_preview(self) -> None:
         if not self.selected_photo_id:
-            if not self.current_live_image.isNull():
-                self.selected_viewer.set_image(self.current_live_image)
-                self._update_secondary_windows()
+            self.selected_viewer.set_image(QImage())
+            self._update_secondary_windows(image=QImage(), title="Secondary Display")
             self.selected_meta_label.setText("No captured image selected")
             return
 
@@ -448,8 +421,6 @@ class MainWindow(QMainWindow):
 
         image_path = record.preview or record.path
         image = QImage(str(image_path))
-        if image.isNull():
-            image = self.current_live_image
         self.selected_viewer.set_image(image)
         self.selected_meta_label.setText(
             f"{record.display_name}\n{record.captured_at}\nSource: {record.source}\nOriginal: {record.original_filename}"
@@ -464,8 +435,6 @@ class MainWindow(QMainWindow):
                     image_path = record.preview or record.path
                     image = QImage(str(image_path))
                     title = record.display_name
-            elif not self.current_live_image.isNull():
-                image = self.current_live_image
         for window in list(self.secondary_windows):
             if window.isVisible():
                 window.set_image(image, title=title)
@@ -564,6 +533,11 @@ class MainWindow(QMainWindow):
         self._persist_config()
         self._update_session_labels()
 
+    def _on_hot_folder_path_changed(self) -> None:
+        if self.hot_folder_check.isChecked():
+            self.hot_folder.set_folder(self.hot_folder_input.text().strip())
+        self._persist_config()
+
     def _push_runtime_options(self) -> None:
         self.camera_manager.update_runtime_options(
             auto_reconnect=self.auto_reconnect_check.isChecked(),
@@ -572,10 +546,6 @@ class MainWindow(QMainWindow):
         )
         self._persist_config()
         self._update_session_labels()
-
-    def _toggle_live_view_visibility(self, enabled: bool) -> None:
-        self.live_viewer.setVisible(enabled)
-        self._persist_config()
 
     def _scan_hot_folder(self) -> None:
         if not self.hot_folder_check.isChecked():
@@ -605,7 +575,6 @@ class MainWindow(QMainWindow):
         self.config.auto_reconnect = self.auto_reconnect_check.isChecked()
         self.config.simulator_auto_capture_seconds = self.sim_capture_spin.value()
         self.config.edsdk_path = self.sdk_path_input.text().strip()
-        self.config.show_live_view = self.show_live_check.isChecked()
         self.config.selected_photo_id = self.selected_photo_id
         self.config.zoom_enabled = self.zoom_toggle.isChecked()
         self.config_store.save(self.config)

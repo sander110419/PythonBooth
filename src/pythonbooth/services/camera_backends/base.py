@@ -3,8 +3,6 @@ from __future__ import annotations
 import abc
 from typing import Iterable
 
-import numpy as np
-
 from ...models import CapturePayload, CameraStatus
 
 
@@ -25,10 +23,6 @@ class CameraBackend(abc.ABC):
 
     @abc.abstractmethod
     def status(self) -> CameraStatus:
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def get_preview_frame(self) -> np.ndarray | None:
         raise NotImplementedError
 
     @abc.abstractmethod

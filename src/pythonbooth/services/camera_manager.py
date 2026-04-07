@@ -5,17 +5,14 @@ import time
 from queue import Empty, Queue
 
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtGui import QImage
 
 from ..models import CapturePayload, CameraStatus
 from .camera_backends import CanonCameraBackend, SimulatedCameraBackend
-from .image_utils import qimage_from_bgr
 
 logger = logging.getLogger(__name__)
 
 
 class CameraManager(QThread):
-    preview_updated = pyqtSignal(QImage)
     status_updated = pyqtSignal(object)
     capture_ready = pyqtSignal(object)
 
@@ -36,7 +33,6 @@ class CameraManager(QThread):
         self._backend = None
         self._stop_requested = False
         self._next_connect_at = 0.0
-        self._next_preview_at = 0.0
 
     @staticmethod
     def backend_options() -> list[tuple[str, str]]:
@@ -86,9 +82,6 @@ class CameraManager(QThread):
 
             if self._backend is not None and getattr(self._backend, "connected", False):
                 self._emit_captures()
-                if now >= self._next_preview_at:
-                    self._emit_preview()
-                    self._next_preview_at = now + 0.1
 
             self.msleep(35)
 
@@ -164,20 +157,6 @@ class CameraManager(QThread):
                 last_error=str(exc),
             )
         self.status_updated.emit(status)
-
-    def _emit_preview(self) -> None:
-        if self._backend is None:
-            return
-        try:
-            frame = self._backend.get_preview_frame()
-        except Exception:
-            logger.exception("Preview retrieval failed")
-            return
-        if frame is None:
-            return
-        qimage = qimage_from_bgr(frame)
-        if qimage is not None:
-            self.preview_updated.emit(qimage)
 
     def _emit_captures(self) -> None:
         if self._backend is None:

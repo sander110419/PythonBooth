@@ -22,7 +22,6 @@ class AppConfig:
     simulator_auto_capture_seconds: float = 0.0
     edsdk_path: str = ""
     secondary_windows: list[dict[str, object]] = field(default_factory=list)
-    show_live_view: bool = True
     selected_photo_id: str = ""
     zoom_enabled: bool = False
 

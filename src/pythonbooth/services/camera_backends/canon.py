@@ -11,7 +11,6 @@ import cv2
 import numpy as np
 
 from ...models import CapturePayload, CameraStatus
-from ..image_utils import encode_bgr_to_jpeg
 from .base import CameraBackend
 from .edsdk import (
     EDSDKError,
@@ -20,18 +19,13 @@ from .edsdk import (
     EDS_ERR_PTP_DEVICE_BUSY,
     EDS_ERR_TAKE_PICTURE_AF_NG,
     get_sdk,
-    kEdsCameraCommand_DoEvfAf,
     kEdsCameraCommand_ExtendShutDownTimer,
     kEdsCameraCommand_PressShutterButton,
     kEdsCameraCommand_ShutterButton_Completely,
     kEdsCameraCommand_ShutterButton_Completely_NonAF,
     kEdsCameraCommand_ShutterButton_Halfway,
     kEdsCameraCommand_ShutterButton_OFF,
-    kEdsEvfOutputDevice_PC,
     kEdsObjectEvent_DirItemRequestTransfer,
-    kEdsPropID_Evf_DepthOfFieldPreview,
-    kEdsPropID_Evf_Mode,
-    kEdsPropID_Evf_OutputDevice,
     kEdsPropID_SaveTo,
     kEdsSaveTo_Host,
 )
@@ -53,9 +47,7 @@ class CanonCameraBackend(CameraBackend):
         self._status = CameraStatus.idle(self.backend_id, "Canon disconnected")
         self._op_lock = threading.RLock()
         self._transfer_queue: SimpleQueue[int] = SimpleQueue()
-        self._last_frame: np.ndarray | None = None
         self._remote_ready = False
-        self._live_view_active = False
         self._last_keepalive = 0.0
 
     @staticmethod
@@ -131,9 +123,8 @@ class CanonCameraBackend(CameraBackend):
                 backend=self.backend_id,
                 connected=True,
                 state="connected",
-                message=f"Connected to {self._device_description}",
+                message=f"Connected to {self._device_description} and polling for captures",
                 camera_name=self._device_description,
-                preview_available=True,
                 available_cameras=self.list_available_cameras(),
             )
             return self._status
@@ -165,10 +156,6 @@ class CanonCameraBackend(CameraBackend):
             self._connected = False
             return
         try:
-            self._release_preview()
-        except Exception:
-            pass
-        try:
             self._sdk.close_session(self._camera_ref)
         except Exception:
             pass
@@ -189,8 +176,8 @@ class CanonCameraBackend(CameraBackend):
             return
 
         self._ensure_remote_ready()
-            try:
-                self._auto_focus()
+        try:
+            self._auto_focus()
             with self._op_lock:
                 try:
                     self._retry(
@@ -229,7 +216,6 @@ class CanonCameraBackend(CameraBackend):
                 message="Capture request failed",
                 camera_name=self._device_description,
                 last_error=str(exc),
-                preview_available=True,
             )
 
     def poll_captures(self) -> list[CapturePayload]:
@@ -237,6 +223,7 @@ class CanonCameraBackend(CameraBackend):
             return []
         with self._op_lock:
             try:
+                self._keep_alive()
                 self._sdk.pump_events()
             except Exception:
                 return []
@@ -257,44 +244,6 @@ class CanonCameraBackend(CameraBackend):
                 except Exception:
                     pass
         return captures
-
-    def get_preview_frame(self) -> np.ndarray | None:
-        if not self._connected or not self._sdk or not self._camera_ref:
-            return None
-        try:
-            with self._op_lock:
-                self._keep_alive()
-                self._sdk.pump_events()
-                if not self._live_view_active:
-                    self._start_preview()
-                data = None
-                for _ in range(5):
-                    try:
-                        data = self._sdk.download_evf_frame_to_bytes(self._camera_ref)
-                        break
-                    except EDSDKError as exc:
-                        if self._should_retry(exc.code):
-                            time.sleep(0.03)
-                            self._sdk.pump_events()
-                            continue
-                        raise
-                if not data:
-                    return self._last_frame
-                image_data = np.frombuffer(data, dtype=np.uint8)
-                frame = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
-                if frame is not None:
-                    self._last_frame = frame
-                return self._last_frame
-        except Exception as exc:
-            self._status = CameraStatus(
-                backend=self.backend_id,
-                connected=self._connected,
-                state="error",
-                message="Live view unavailable",
-                camera_name=self._device_description,
-                last_error=str(exc),
-            )
-            return self._last_frame
 
     def _register_handlers(self) -> None:
         assert self._sdk is not None
@@ -337,13 +286,6 @@ class CanonCameraBackend(CameraBackend):
         if not self._sdk or not self._camera_ref:
             return
         with self._op_lock:
-            try:
-                self._sdk.send_command(self._camera_ref, kEdsCameraCommand_DoEvfAf, 1)
-                time.sleep(0.18)
-                self._sdk.send_command(self._camera_ref, kEdsCameraCommand_DoEvfAf, 0)
-                return
-            except Exception:
-                pass
             self._retry(
                 lambda: self._sdk.send_command(
                     self._camera_ref,
@@ -358,45 +300,6 @@ class CanonCameraBackend(CameraBackend):
                 self._sdk.send_command(self._camera_ref, kEdsCameraCommand_PressShutterButton, kEdsCameraCommand_ShutterButton_OFF)
             except Exception:
                 pass
-
-    def _start_preview(self) -> None:
-        if not self._sdk or not self._camera_ref:
-            return
-        self._retry(lambda: self._sdk.set_u32_property(self._camera_ref, kEdsPropID_Evf_Mode, 1), retries=5, delay_s=0.08)
-        try:
-            current = self._sdk.get_u32_property(self._camera_ref, kEdsPropID_Evf_OutputDevice)
-        except Exception:
-            current = 0
-        self._retry(
-            lambda: self._sdk.set_u32_property(self._camera_ref, kEdsPropID_Evf_OutputDevice, int(current) | int(kEdsEvfOutputDevice_PC)),
-            retries=5,
-            delay_s=0.08,
-        )
-        self._live_view_active = True
-        time.sleep(0.18)
-
-    def _release_preview(self) -> None:
-        if not self._sdk or not self._camera_ref or not self._live_view_active:
-            return
-        try:
-            dof = self._sdk.get_u32_property(self._camera_ref, kEdsPropID_Evf_DepthOfFieldPreview)
-            if int(dof) != 0:
-                self._sdk.set_u32_property(self._camera_ref, kEdsPropID_Evf_DepthOfFieldPreview, 0)
-        except Exception:
-            pass
-        try:
-            current = self._sdk.get_u32_property(self._camera_ref, kEdsPropID_Evf_OutputDevice)
-        except Exception:
-            current = int(kEdsEvfOutputDevice_PC)
-        try:
-            self._sdk.set_u32_property(self._camera_ref, kEdsPropID_Evf_OutputDevice, int(current) & ~int(kEdsEvfOutputDevice_PC))
-        except Exception:
-            pass
-        try:
-            self._sdk.set_u32_property(self._camera_ref, kEdsPropID_Evf_Mode, 0)
-        except Exception:
-            pass
-        self._live_view_active = False
 
     def _keep_alive(self) -> None:
         if not self._sdk or not self._camera_ref:
@@ -421,9 +324,6 @@ class CanonCameraBackend(CameraBackend):
         image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is not None:
             preview_data = data
-            self._last_frame = image
-        elif self._last_frame is not None:
-            preview_data = encode_bgr_to_jpeg(self._last_frame, quality=88)
 
         return CapturePayload(
             data=data,

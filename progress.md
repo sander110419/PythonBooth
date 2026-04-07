@@ -5,13 +5,13 @@
 - [x] Inspect the empty workspace and the reference Canon/photobooth implementation
 - [x] Define the application architecture and phased delivery plan
 - [x] Scaffold the project structure, packaging, and entrypoints
-- [ ] Implement the session library, metadata storage, and thumbnail pipeline
+- [x] Implement the session library, metadata storage, and thumbnail pipeline
 - [x] Build the naming-template engine with wildcard and variable support
-- [ ] Implement simulator and Canon camera backends with reconnect polling
-- [ ] Build the polished PyQt6 main window, live preview, timeline, and zoom workflow
-- [ ] Add secondary display windows, hot-folder import, shortcuts, and session utilities
-- [ ] Run automated tests and repeated application smoke tests
-- [ ] Fix runtime issues found during testing and document remaining limitations
+- [x] Implement simulator and Canon camera backends with reconnect polling
+- [x] Build the polished PyQt6 main window, selected-photo preview, timeline, and zoom workflow
+- [x] Add secondary display windows, hot-folder import, shortcuts, and session utilities
+- [x] Run automated tests and repeated application smoke tests
+- [x] Fix runtime issues found during testing and document remaining limitations
 
 ## Log
 
@@ -19,3 +19,13 @@
 - 2026-04-07: Chose a clean-room architecture for `PythonBooth` with a camera backend abstraction, simulator mode, persistent session library, and detachable display windows.
 - 2026-04-07: Implemented `pythonbooth.services.naming` with wildcard and brace-style templates, cross-platform sanitization, sequence selection, and compiled filename previews.
 - 2026-04-07: Added pytest coverage for brace tokens, wildcard templates, mixed templates, sanitization, and context field exposure. Verified with `PYTHONPATH=src python -m pytest -q` -> `5 passed`.
+- 2026-04-07: Added the persistent session library, thumbnail generation, hot-folder watcher, logging setup, simulator backend, Canon EDSDK backend, and threaded camera manager.
+- 2026-04-07: Built the PyQt6 control application with selected-photo preview, Lightroom-style timeline, zoom controls, delete workflow, secondary display windows, and session/naming controls.
+- 2026-04-07: Resolved a Canon backend indentation bug and replaced a painter-based placeholder thumbnail with a headless-safe OpenCV fallback after smoke testing.
+- 2026-04-07: Verified with `python -m compileall src main.py tests`, `QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m pytest -q` -> `6 passed`, offscreen simulator launch, scripted simulator capture smoke test (`photos=1`), Canon no-camera startup smoke test (`status=Error`, `Canon SDK not found`), and hot-folder import smoke test (`photos=1`).
+- 2026-04-07: Removed live-view polling from the UI and camera manager so the app only polls for completed captures, then updates the selected image and timeline.
+
+## Remaining limitation
+
+- Canon tethering code is implemented and reconnect-safe, but it could not be validated against a real connected camera in this environment.
+- Linux Canon testing is also limited by the absence of a local x86_64 `libEDSDK.so` binary in the workspace; the current machine only had the Windows DLLs and ARM Linux SDK files in the reference project.
