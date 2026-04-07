@@ -5,6 +5,7 @@ PythonBooth is a PyQt6-based photobooth and tethering application focused on Can
 ## Current feature set
 
 - Modern main control window with selected-image preview, timeline, and session controls
+- Preview-first layout with a compact action bar and setup options moved into an options menu
 - Canon EDSDK backend with reconnect polling and a simulator backend for hardware-free testing
 - Session library with thumbnails, metadata, deletion, and persistent sessions on disk
 - Flexible naming engine with wildcard and variable support
@@ -15,9 +16,10 @@ PythonBooth is a PyQt6-based photobooth and tethering application focused on Can
 ## Workflow highlights
 
 - Capture-driven tethering that polls the camera for new images without running live view
-- Large selected-image preview so each new capture is immediately reviewable
+- Near-fullscreen selected-image preview so each new capture is immediately reviewable
 - Lightroom-style horizontal timeline with automatic selection and right-click delete
 - Zoom toggle with `fit` and `fill` display modes for the selected preview
+- Options menu keeps backend, naming, hot-folder, reconnect, simulator, and SDK setup off the main review surface
 - Session-aware naming previews using templates such as `{EVENT}_{BOOTH}_{DAY}_{CAMERA:05d}.{EXT}` or `EVENT_BOOTH_DAY_0XXXX.CRX`
 - Secondary display windows that can be resized freely and toggled fullscreen with `F11`
 - Hot-folder import for workflows where another process downloads images outside direct tethering

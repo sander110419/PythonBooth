@@ -24,6 +24,8 @@
 - 2026-04-07: Resolved a Canon backend indentation bug and replaced a painter-based placeholder thumbnail with a headless-safe OpenCV fallback after smoke testing.
 - 2026-04-07: Verified with `python -m compileall src main.py tests`, `QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m pytest -q` -> `6 passed`, offscreen simulator launch, scripted simulator capture smoke test (`photos=1`), Canon no-camera startup smoke test (`status=Error`, `Canon SDK not found`), and hot-folder import smoke test (`photos=1`).
 - 2026-04-07: Removed live-view polling from the UI and camera manager so the app only polls for completed captures, then updates the selected image and timeline.
+- 2026-04-07: Reworked the UI into a preview-first layout with a compact top action bar, near-fullscreen selected-image viewer, slim timeline strip, and an options menu/dialog for backend, naming, reconnect, hot-folder, simulator, and SDK settings.
+- 2026-04-07: Verified the new UI with `python -m compileall src main.py tests`, `QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m pytest -q` -> `6 passed`, offscreen app launch, and a simulator capture smoke test after opening the options dialog (`photos=1`).
 
 ## Remaining limitation
 

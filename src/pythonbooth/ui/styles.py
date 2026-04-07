@@ -78,6 +78,10 @@ QPushButton, QToolButton {
     padding: 10px 14px;
     font-weight: 600;
 }
+QToolButton::menu-indicator {
+    image: none;
+    width: 0;
+}
 QPushButton:hover, QToolButton:hover {
     background: rgba(255, 255, 255, 0.11);
 }
@@ -106,6 +110,19 @@ QCheckBox::indicator:checked {
 QListWidget {
     background: transparent;
     border: none;
+}
+QMenu {
+    background: rgba(11, 16, 23, 240);
+    border: 1px solid rgba(127, 214, 194, 42);
+    border-radius: 14px;
+    padding: 8px;
+}
+QMenu::item {
+    padding: 10px 14px;
+    border-radius: 10px;
+}
+QMenu::item:selected {
+    background: rgba(69, 195, 172, 0.2);
 }
 QScrollBar:horizontal, QScrollBar:vertical {
     background: transparent;
