@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QMenu
@@ -20,9 +18,9 @@ class TimelineWidget(QListWidget):
         self.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.setMovement(QListWidget.Movement.Static)
         self.setWrapping(False)
-        self.setSpacing(18)
-        self.setIconSize(QSize(210, 150))
-        self.setGridSize(QSize(236, 208))
+        self.setSpacing(12)
+        self.setIconSize(QSize(160, 114))
+        self.setGridSize(QSize(182, 156))
         self.itemSelectionChanged.connect(self._emit_selection)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
 

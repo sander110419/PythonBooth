@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+RAW_RECORD_SUFFIXES = {".cr2", ".cr3", ".raw"}
+
 
 @dataclass(slots=True)
 class CapturePayload:
@@ -44,6 +46,14 @@ class PhotoRecord:
     @property
     def thumbnail(self) -> Path | None:
         return Path(self.thumbnail_path) if self.thumbnail_path else None
+
+    @property
+    def is_raw(self) -> bool:
+        return self.path.suffix.lower() in RAW_RECORD_SUFFIXES
+
+    @property
+    def display_preview_source(self) -> Path:
+        return self.preview or self.path
 
 
 @dataclass(slots=True)

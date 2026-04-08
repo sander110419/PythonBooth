@@ -6,7 +6,15 @@ from pathlib import Path
 
 from ..models import CaptureJobRecord, CapturePayload, PhotoRecord, new_photo_id
 from .backup_writer import write_backups
-from .image_utils import build_thumbnail, qimage_from_bytes, save_bytes
+from .image_utils import (
+    build_thumbnail,
+    encode_qimage_to_jpeg_bytes,
+    preview_bytes_from_data,
+    preview_image_from_data,
+    qimage_from_bytes,
+    save_bytes,
+    suffix_from_filename,
+)
 from .library import FilenameBuilder, SessionLibrary
 
 
@@ -37,10 +45,14 @@ class CapturePipeline:
         payload_path = self.session_library.payloads_dir / f"{job_id}.bin"
         save_bytes(payload_path, capture.data)
 
+        preview_payload = capture.preview_data or preview_bytes_from_data(
+            capture.data,
+            suffix=suffix_from_filename(capture.original_filename),
+        )
         preview_payload_path: Path | None = None
-        if capture.preview_data and capture.preview_data != capture.data:
+        if preview_payload and preview_payload != capture.data:
             preview_payload_path = self.session_library.payloads_dir / f"{job_id}_preview.bin"
-            save_bytes(preview_payload_path, capture.preview_data)
+            save_bytes(preview_payload_path, preview_payload)
 
         job = CaptureJobRecord(
             id=job_id,
@@ -103,15 +115,27 @@ class CapturePipeline:
         try:
             self._write_primary(Path(plan.final_path), capture.data)
 
-            if capture.preview_data:
+            if plan.preview_path:
                 job.status = "building-preview"
                 job.updated_at = _now_iso()
                 self.session_library.upsert_job(job)
-                if plan.preview_path:
-                    self._write_primary(Path(plan.preview_path), capture.preview_data)
-            elif plan.preview_path and not Path(plan.preview_path).exists():
-                if qimage_from_bytes(capture.data) is not None:
-                    self._write_primary(Path(plan.preview_path), capture.data)
+                preview_bytes = None
+                source_suffix = suffix_from_filename(capture.original_filename)
+                if capture.preview_data and source_suffix.lower() not in {".cr2", ".cr3", ".raw"}:
+                    preview_bytes = capture.preview_data
+                elif capture.preview_data or source_suffix.lower() in {".cr2", ".cr3", ".raw"}:
+                    preview_image = preview_image_from_data(
+                        capture.data,
+                        suffix=source_suffix,
+                        preview_data=capture.preview_data,
+                    )
+                    if preview_image is not None and not preview_image.isNull():
+                        preview_bytes = encode_qimage_to_jpeg_bytes(preview_image)
+                elif qimage_from_bytes(capture.data) is not None:
+                    preview_bytes = capture.data
+
+                if preview_bytes:
+                    self._write_primary(Path(plan.preview_path), preview_bytes)
                 else:
                     job.preview_path = None
 

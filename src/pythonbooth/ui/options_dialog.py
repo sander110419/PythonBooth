@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QColorDialog,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -27,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..config import AppConfig
+from .styles import DEFAULT_BACKGROUND_COLOR, normalize_background_color
 
 
 class OptionsDialog(QDialog):
@@ -69,6 +72,7 @@ class OptionsDialog(QDialog):
         content_layout.setSpacing(12)
 
         content_layout.addWidget(self._build_session_group())
+        content_layout.addWidget(self._build_appearance_group())
         content_layout.addWidget(self._build_capture_group())
         content_layout.addWidget(self._build_paths_group())
         content_layout.addStretch(1)
@@ -124,6 +128,10 @@ class OptionsDialog(QDialog):
             QPushButton:hover {
                 background: rgba(255, 255, 255, 0.11);
             }
+            QFrame#ColorSwatch {
+                border-radius: 10px;
+                border: 1px solid rgba(210, 220, 245, 0.22);
+            }
             """
         )
 
@@ -149,6 +157,40 @@ class OptionsDialog(QDialog):
         layout.addRow("Booth / machine", self.booth_edit)
         layout.addRow("Session name", self.session_edit)
         layout.addRow("Filename template", self.naming_template_edit)
+        return group
+
+    def _build_appearance_group(self) -> QGroupBox:
+        group = QGroupBox("Appearance")
+        layout = QFormLayout(group)
+        layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.setHorizontalSpacing(14)
+        layout.setVerticalSpacing(12)
+
+        self.background_color_value = QLineEdit()
+        self.background_color_value.setReadOnly(True)
+        self.background_color_value.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self.background_color_swatch = QFrame()
+        self.background_color_swatch.setFixedSize(44, 28)
+        self.background_color_swatch.setObjectName("ColorSwatch")
+
+        self.background_color_pick_button = QPushButton("Pick Color")
+        self.background_color_pick_button.clicked.connect(self._pick_background_color)
+        self.background_color_reset_button = QPushButton("Reset")
+        self.background_color_reset_button.clicked.connect(lambda: self._set_background_color(DEFAULT_BACKGROUND_COLOR))
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(10)
+        row_layout.addWidget(self.background_color_swatch, 0)
+        row_layout.addWidget(self.background_color_value, 1)
+        row_layout.addWidget(self.background_color_pick_button, 0)
+        row_layout.addWidget(self.background_color_reset_button, 0)
+
+        layout.addRow("Image background", row)
+        self._set_background_color(DEFAULT_BACKGROUND_COLOR)
         return group
 
     def _build_capture_group(self) -> QGroupBox:
@@ -247,12 +289,25 @@ class OptionsDialog(QDialog):
         self.hot_folder_edit.setEnabled(enabled)
         self.hot_folder_browse_button.setEnabled(enabled)
 
+    def _pick_background_color(self) -> None:
+        chosen = QColorDialog.getColor(QColor(self.background_color_value.text()), self, "Select application background color")
+        if chosen.isValid():
+            self._set_background_color(chosen.name())
+
+    def _set_background_color(self, value: str) -> None:
+        color = normalize_background_color(value)
+        self.background_color_value.setText(color)
+        self.background_color_swatch.setStyleSheet(
+            f"QFrame#ColorSwatch {{ background: {color}; border-radius: 10px; border: 1px solid rgba(210, 220, 245, 0.22); }}"
+        )
+
     def set_options(self, options: Mapping[str, Any]) -> None:
         backend = str(options.get("backend", "simulator"))
         backend_index = self.backend_combo.findData(backend)
         if backend_index >= 0:
             self.backend_combo.setCurrentIndex(backend_index)
 
+        self._set_background_color(str(options.get("background_color", DEFAULT_BACKGROUND_COLOR)))
         self.event_edit.setText(str(options.get("event_name", "")))
         self.booth_edit.setText(str(options.get("booth_name", "")))
         self.session_edit.setText(str(options.get("session_name", "")))
@@ -271,6 +326,7 @@ class OptionsDialog(QDialog):
         self.set_options(
             {
                 "backend": config.backend,
+                "background_color": config.background_color,
                 "event_name": config.event_name,
                 "booth_name": config.booth_name,
                 "session_name": config.session_name,
@@ -289,6 +345,7 @@ class OptionsDialog(QDialog):
     def options_dict(self) -> dict[str, Any]:
         return {
             "backend": self.backend_combo.currentData(),
+            "background_color": self.background_color_value.text().strip(),
             "event_name": self.event_edit.text().strip(),
             "booth_name": self.booth_edit.text().strip(),
             "session_name": self.session_edit.text().strip(),

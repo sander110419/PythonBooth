@@ -7,6 +7,7 @@ from pathlib import Path
 from PyQt6.QtCore import QTimer, Qt, QUrl
 from PyQt6.QtGui import QAction, QDesktopServices, QImage, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -27,13 +28,15 @@ from ..services.camera_manager import CameraManager
 from ..services.capture_pipeline import CapturePipeline
 from ..services.diagnostics import export_diagnostics_bundle
 from ..services.hot_folder import HotFolderWatcher
+from ..services.image_utils import load_preview_image
 from ..services.library import SessionLibrary
 from ..services.naming import NamingContext, compile_filename, sanitize_filename_part
 from ..services.preflight import run_preflight
 from .options_dialog import OptionsDialog
 from .secondary_window import SecondaryDisplayWindow
+from .styles import apply_theme
 from .timeline import TimelineWidget
-from .viewer import PhotoViewer
+from .viewer import AspectRatioPreviewWidget
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,7 @@ class MainWindow(QMainWindow):
         self.resize(1720, 1040)
         self.setMinimumSize(1360, 860)
         self._build_ui()
+        self._apply_background_theme()
         self.selected_viewer.set_zoom_enabled(self.config.zoom_enabled)
         self._bind_shortcuts()
         self._bind_signals()
@@ -102,35 +106,42 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         root = QWidget()
+        root.setObjectName("AppRoot")
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(20, 20, 20, 20)
-        outer.setSpacing(16)
+        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setSpacing(10)
 
         outer.addWidget(self._build_top_bar())
         outer.addWidget(self._build_content(), 1)
 
         status_bar = QStatusBar()
         self.setStatusBar(status_bar)
+        self.session_stats_label = QLabel("")
+        self.selected_meta_label = QLabel("No photo selected")
+        self.session_stats_label.setObjectName("MutedText")
+        self.selected_meta_label.setObjectName("MutedText")
+        status_bar.addPermanentWidget(self.session_stats_label, 1)
+        status_bar.addPermanentWidget(self.selected_meta_label, 2)
         self.status_message("Ready")
 
     def _build_top_bar(self) -> QWidget:
         card = self._card()
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(16)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(12)
 
         left = QVBoxLayout()
-        left.setSpacing(4)
+        left.setSpacing(2)
 
         title = QLabel("PythonBooth")
         title.setObjectName("TitleLabel")
         self.session_path_label = QLabel("")
         self.session_path_label.setObjectName("MutedText")
-        self.session_path_label.setWordWrap(True)
+        self.session_path_label.setWordWrap(False)
         self.camera_info_label = QLabel("Waiting for camera")
         self.camera_info_label.setObjectName("MutedText")
-        self.camera_info_label.setWordWrap(True)
+        self.camera_info_label.setWordWrap(False)
 
         left.addWidget(title)
         left.addWidget(self.session_path_label)
@@ -165,7 +176,7 @@ class MainWindow(QMainWindow):
         self.status_pill.style().polish(self.status_pill)
 
         actions = QHBoxLayout()
-        actions.setSpacing(10)
+        actions.setSpacing(8)
         actions.addWidget(self.reconnect_button)
         actions.addWidget(self.capture_button)
         actions.addWidget(self.new_session_button)
@@ -179,53 +190,34 @@ class MainWindow(QMainWindow):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(10)
 
         layout.addWidget(self._build_preview_card(), 1)
 
         timeline_card = self._build_timeline_card()
-        timeline_card.setMinimumHeight(220)
-        timeline_card.setMaximumHeight(300)
+        timeline_card.setMinimumHeight(156)
+        timeline_card.setMaximumHeight(196)
         layout.addWidget(timeline_card, 0)
         return content
 
     def _build_preview_card(self) -> QWidget:
         card = self._card()
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
 
         header = QHBoxLayout()
-        header.setSpacing(14)
-
-        header_left = QVBoxLayout()
-        header_left.setSpacing(4)
-        section = self._section_title("Preview")
+        header.setSpacing(10)
         self.next_filename_label = QLabel("")
         self.next_filename_label.setObjectName("MutedText")
-        self.next_filename_label.setWordWrap(True)
-        header_left.addWidget(section)
-        header_left.addWidget(self.next_filename_label)
-        header.addLayout(header_left, 1)
+        self.next_filename_label.setWordWrap(False)
+        header.addWidget(self.next_filename_label, 1)
         header.addWidget(self._build_preview_toolbar(), 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
 
-        self.selected_viewer = PhotoViewer()
-        self.selected_viewer.setMinimumHeight(620)
-        layout.addWidget(self.selected_viewer, 1)
-
-        footer = QHBoxLayout()
-        footer.setSpacing(18)
-        self.session_stats_label = QLabel("")
-        self.session_stats_label.setObjectName("MutedText")
-        self.session_stats_label.setWordWrap(True)
-        self.selected_meta_label = QLabel("No photo selected")
-        self.selected_meta_label.setObjectName("MutedText")
-        self.selected_meta_label.setWordWrap(True)
-        self.selected_meta_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        footer.addWidget(self.session_stats_label, 1)
-        footer.addWidget(self.selected_meta_label, 1)
-        layout.addLayout(footer)
+        self.preview_stage = AspectRatioPreviewWidget()
+        self.selected_viewer = self.preview_stage.viewer
+        layout.addWidget(self.preview_stage, 1)
 
         return card
 
@@ -233,7 +225,7 @@ class MainWindow(QMainWindow):
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         self.zoom_toggle = QPushButton("Zoom")
         self.zoom_toggle.setCheckable(True)
@@ -257,8 +249,8 @@ class MainWindow(QMainWindow):
     def _build_timeline_card(self) -> QWidget:
         card = self._card("TimelineCard")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
 
         title_row = QHBoxLayout()
         title_row.setSpacing(12)
@@ -324,6 +316,7 @@ class MainWindow(QMainWindow):
         previous_session_name = self.config.session_name
 
         self.config.backend = str(updated.get("backend") or self.config.backend)
+        self.config.background_color = str(updated.get("background_color", self.config.background_color))
         self.config.event_name = str(updated.get("event_name", self.config.event_name))
         self.config.booth_name = str(updated.get("booth_name", self.config.booth_name))
         self.config.session_name = str(updated.get("session_name", self.config.session_name))
@@ -351,6 +344,10 @@ class MainWindow(QMainWindow):
         )
         if previous_backend != self.config.backend:
             self.camera_manager.switch_backend(self.config.backend)
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app)
+        self._apply_background_theme()
 
         self.session_library.update_context(self.session_id, self.config)
         self._update_filename_preview()
@@ -410,9 +407,9 @@ class MainWindow(QMainWindow):
 
     def _update_selected_preview(self) -> None:
         if not self.selected_photo_id:
-            self.selected_viewer.set_image(QImage())
+            self.preview_stage.set_image(QImage())
             self._update_secondary_windows(image=QImage(), title="Secondary Display")
-            self.selected_meta_label.setText("No captured image selected")
+            self.selected_meta_label.setText("No photo selected")
             return
 
         record = self.session_library.get(self.selected_photo_id)
@@ -421,27 +418,32 @@ class MainWindow(QMainWindow):
             self._update_selected_preview()
             return
 
-        image_path = record.preview or record.path
-        image = QImage(str(image_path))
-        self.selected_viewer.set_image(image)
+        image = load_preview_image(record.display_preview_source)
+        self.preview_stage.set_image(image)
         self.selected_meta_label.setText(
-            f"{record.display_name}\nCaptured {record.captured_at}\nSource {record.source}\nOriginal {record.original_filename}"
+            f"Selected: {record.display_name} | Captured {record.captured_at} | Source {record.source} | Original {record.original_filename}"
         )
         self._update_secondary_windows(image=image, title=record.display_name)
 
     def _update_secondary_windows(self, image: QImage | None = None, title: str = "Secondary Display") -> None:
         if image is None and self.selected_photo_id:
-            record = self.session_library.get(self.selected_photo_id)
-            if record is not None:
-                image_path = record.preview or record.path
-                image = QImage(str(image_path))
-                title = record.display_name
+            image, title = self._current_secondary_window_payload()
 
         for window in list(self.secondary_windows):
             if window.isVisible():
                 window.set_image(image, title=title)
             else:
                 self.secondary_windows.remove(window)
+
+    def _current_secondary_window_payload(self) -> tuple[QImage, str]:
+        if not self.selected_photo_id:
+            return QImage(), "Secondary Display"
+
+        record = self.session_library.get(self.selected_photo_id)
+        if record is None:
+            return QImage(), "Secondary Display"
+
+        return load_preview_image(record.display_preview_source), record.display_name
 
     def _update_filename_preview(self) -> None:
         template = self.config.naming_template.strip() or "{EVENT}_{BOOTH}_{DAY}_{CAMERA:05d}.{EXT}"
@@ -462,16 +464,14 @@ class MainWindow(QMainWindow):
             extension="jpg",
         )
         compiled = compile_filename(template, context)
-        self.next_filename_label.setText(f"Next filename: {compiled.filename}")
+        self.next_filename_label.setText(f"Next: {compiled.filename}")
 
     def _update_session_labels(self) -> None:
         count = len(self.session_library.records)
         series_name = self.config.session_name.strip() or "Untitled"
         queue = self.capture_pipeline.queue_summary()
-        queue_text = f"Queue pending: {queue['pending']} | failed: {queue['failed']} | warnings: {queue['warnings']}"
-        self.session_stats_label.setText(
-            f"{count} photo{'s' if count != 1 else ''}\nCurrent session: {self.session_id}\n{queue_text}\nFolder: {self.session_library.session_root}"
-        )
+        queue_text = f"Queue {queue['pending']} pending | {queue['failed']} failed | {queue['warnings']} warnings"
+        self.session_stats_label.setText(f"{count} photo{'s' if count != 1 else ''} | Session {self.session_id} | {queue_text}")
         self.session_path_label.setText(
             f"Series preset: {series_name} | Current session: {self.session_id}"
         )
@@ -524,10 +524,16 @@ class MainWindow(QMainWindow):
         )
 
     def _create_secondary_window(self) -> None:
-        window = SecondaryDisplayWindow(self)
+        window = SecondaryDisplayWindow(self, background_color=self.config.background_color)
         self.secondary_windows.append(window)
-        self._update_secondary_windows()
+        image, title = self._current_secondary_window_payload()
+        window.set_image(image, title=title)
         window.show()
+
+    def _apply_background_theme(self) -> None:
+        self.preview_stage.set_background_color(self.config.background_color)
+        for window in list(self.secondary_windows):
+            window.set_background_color(self.config.background_color)
 
     def _delete_selected_photo(self) -> None:
         if not self.selected_photo_id:

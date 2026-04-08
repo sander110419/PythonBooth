@@ -35,6 +35,18 @@
 - 2026-04-08: Verified the reliability pass with `python -m compileall src main.py tests`, `python -m pytest -q` -> `19 passed`, and `QT_QPA_PLATFORM=offscreen PYTHONPATH=src python main.py --demo --auto-exit-ms 1200`.
 - 2026-04-08: Added an offscreen recovery smoke test that simulated an unclean exit after a capture and confirmed the next launch restored the same session with the captured photo intact (`restored=True photos=1`).
 - 2026-04-08: Added Canon-specific tethering guidance so busy/file-transfer connection failures now point operators to `[Choose USB connection app] -> [Photo Import/Remote Control]`, Wi-Fi-off, direct-USB, and Linux auto-mount conflict checks. Added a matching preflight warning and regression coverage.
+- 2026-04-08: Hardened Canon capture requests for EOS R bodies by clearing stale transfer events before each shot and preferring Canon's direct `TakePicture` command with shutter-press fallback, to reduce tethered capture faults such as camera-side `Err 70`.
+- 2026-04-08: Fixed preview rendering for RAW captures by extracting Canon SDK thumbnails for tethered CR2/CR3 files, adding embedded-JPEG fallback extraction for local/imported RAW files, and making the viewer/thumbnail pipeline load those previews instead of trying to open RAW files directly.
+- 2026-04-08: Corrected a Canon transfer regression by removing thumbnail extraction from the live `DirItemRequestTransfer` path; RAW previews now come from the downloaded CR2/CR3 bytes so capture delivery to the app is not interrupted.
+- 2026-04-08: Reworked the main window again to prioritize the selected-photo area: slimmer header chrome, removed preview footer blocks, reduced timeline height, and added a centered aspect-ratio preview stage that keeps the visible canvas locked to 3:2 or 2:3 while using the maximum available space.
+- 2026-04-08: Fixed secondary-display initialization so a newly opened secondary window is seeded immediately with the current selected image instead of waiting for the next selection or capture event. Added an offscreen regression test for that flow.
+- 2026-04-08: Updated the shared preview decoder to honor EXIF rotation via Qt auto-transform, so the main preview, timeline thumbnails, secondary displays, and embedded RAW JPEG previews all follow camera orientation correctly.
+- 2026-04-08: Fixed portrait RAW preview handling by applying raw-file orientation metadata when Canon embedded previews arrive landscape, and updated the main preview stage to switch between 3:2 and 2:3 based on the selected image orientation.
+- 2026-04-08: Added an appearance setting for application background color, including a color picker in the options dialog, persisted config, and live theme refresh so the main window updates immediately without restarting.
+- 2026-04-08: Reduced RAW-session startup cost by skipping unsupported 14-bit embedded JPEG candidates, using cached preview/thumbnail files in the UI once they exist, and only rebuilding RAW previews on launch when they are missing or orientation-mismatched.
+- 2026-04-08: Refined the custom-background theme behavior so only the app backdrop follows the chosen color, while labels, cards, controls, and the status bar keep their intended dark surfaces and contrast.
+- 2026-04-08: Extended the custom background theme into the image presentation surfaces so the letterboxed area behind photos updates in both the main preview and every secondary display window.
+- 2026-04-08: Narrowed the custom color setting further so it now applies only to the image background surfaces behind photos; the surrounding app shell stays on the default dark theme.
 
 ## Remaining limitation
 

@@ -4,15 +4,22 @@ from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QApplication
 
 
-APP_STYLESHEET = """
+DEFAULT_BACKGROUND_COLOR = "#0b1017"
+
+APP_STYLESHEET_TEMPLATE = """
 QWidget {
-    background: #0b1017;
     color: #edf2ff;
     font-family: "Aptos", "Segoe UI", "Noto Sans", sans-serif;
     font-size: 14px;
 }
 QMainWindow {
+    background: #0b1017;
+}
+QWidget#AppRoot {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0b1017, stop:0.4 #101927, stop:1 #152434);
+}
+QLabel {
+    background: transparent;
 }
 QFrame#Card {
     background: rgba(17, 26, 39, 210);
@@ -25,7 +32,7 @@ QFrame#TimelineCard {
     border-radius: 22px;
 }
 QLabel#TitleLabel {
-    font-size: 32px;
+    font-size: 24px;
     font-weight: 700;
 }
 QLabel#SectionTitle {
@@ -75,7 +82,7 @@ QPushButton, QToolButton {
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(210, 220, 245, 0.14);
     border-radius: 14px;
-    padding: 10px 14px;
+    padding: 8px 12px;
     font-weight: 600;
 }
 QToolButton::menu-indicator {
@@ -147,15 +154,26 @@ QStatusBar {
 """
 
 
-def apply_theme(app: QApplication) -> None:
+def normalize_background_color(value: str | None) -> str:
+    candidate = QColor(str(value).strip()) if value else QColor()
+    return candidate.name() if candidate.isValid() else DEFAULT_BACKGROUND_COLOR
+
+
+def build_app_stylesheet(background_color: str | None = None) -> str:
+    return APP_STYLESHEET_TEMPLATE
+
+
+def apply_theme(app: QApplication, background_color: str | None = None) -> None:
+    base = QColor("#101927")
+    alternate = QColor("#152434")
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor("#0b1017"))
-    palette.setColor(QPalette.ColorRole.Base, QColor("#101927"))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#152434"))
+    palette.setColor(QPalette.ColorRole.Base, base)
+    palette.setColor(QPalette.ColorRole.AlternateBase, alternate)
     palette.setColor(QPalette.ColorRole.Text, QColor("#edf2ff"))
-    palette.setColor(QPalette.ColorRole.Button, QColor("#101927"))
+    palette.setColor(QPalette.ColorRole.Button, base)
     palette.setColor(QPalette.ColorRole.ButtonText, QColor("#edf2ff"))
     palette.setColor(QPalette.ColorRole.Highlight, QColor("#45c3ac"))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#081018"))
     app.setPalette(palette)
-    app.setStyleSheet(APP_STYLESHEET)
+    app.setStyleSheet(build_app_stylesheet(background_color))

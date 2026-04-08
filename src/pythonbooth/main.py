@@ -26,13 +26,13 @@ def main(argv: list[str] | None = None) -> int:
     ensure_app_dirs()
     configure_logging(verbose=args.verbose)
 
-    app = QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
-    apply_theme(app)
-
     config_store = ConfigStore()
     config = config_store.load()
     if args.demo:
         config.backend = "simulator"
+
+    app = QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
+    apply_theme(app)
 
     window = MainWindow(config_store, config)
     window.show()

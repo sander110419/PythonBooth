@@ -239,6 +239,8 @@ class EDSDK:
         lib.EdsGetDirectoryItemInfo.restype = EdsError
         lib.EdsDownload.argtypes = [EdsDirectoryItemRef, EdsUInt64, EdsStreamRef]
         lib.EdsDownload.restype = EdsError
+        lib.EdsDownloadThumbnail.argtypes = [EdsDirectoryItemRef, EdsStreamRef]
+        lib.EdsDownloadThumbnail.restype = EdsError
         lib.EdsDownloadComplete.argtypes = [EdsDirectoryItemRef]
         lib.EdsDownloadComplete.restype = EdsError
         lib.EdsDeleteDirectoryItem.argtypes = [EdsDirectoryItemRef]
@@ -375,6 +377,24 @@ class EDSDK:
             read = EdsUInt64(0)
             _check(self._lib.EdsRead(stream, EdsUInt64(length.value), ctypes.byref(buf), ctypes.byref(read)), "EdsRead failed")
             return filename, bytes(buf[: int(read.value)])
+        finally:
+            if stream:
+                self._lib.EdsRelease(stream)
+
+    def download_directory_thumbnail(self, dir_item_ref: EdsDirectoryItemRef) -> bytes:
+        stream = EdsStreamRef()
+        _check(self._lib.EdsCreateMemoryStream(EdsUInt64(0), ctypes.byref(stream)), "EdsCreateMemoryStream failed")
+        try:
+            _check(self._lib.EdsDownloadThumbnail(dir_item_ref, stream), "EdsDownloadThumbnail failed")
+            length = EdsUInt64(0)
+            _check(self._lib.EdsGetLength(stream, ctypes.byref(length)), "EdsGetLength failed")
+            if length.value == 0:
+                return b""
+            _check(self._lib.EdsSeek(stream, EdsInt64(0), EdsInt32(kEdsSeek_Begin)), "EdsSeek(Begin) failed")
+            buf = (ctypes.c_ubyte * int(length.value))()
+            read = EdsUInt64(0)
+            _check(self._lib.EdsRead(stream, EdsUInt64(length.value), ctypes.byref(buf), ctypes.byref(read)), "EdsRead failed")
+            return bytes(buf[: int(read.value)])
         finally:
             if stream:
                 self._lib.EdsRelease(stream)

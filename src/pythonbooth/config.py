@@ -12,6 +12,7 @@ from .services.atomic_io import atomic_write_json
 @dataclass(slots=True)
 class AppConfig:
     backend: str = "simulator"
+    background_color: str = "#0b1017"
     event_name: str = "Event"
     booth_name: str = socket.gethostname().upper()
     session_name: str = "Session"

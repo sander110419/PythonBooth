@@ -7,11 +7,9 @@ import threading
 import time
 from queue import Empty, SimpleQueue
 
-import cv2
-import numpy as np
-
 from ...models import CapturePayload, CameraStatus
 from ..canon_guidance import build_canon_access_help
+from ..image_utils import preview_bytes_from_data
 from .base import CameraBackend, FatalCameraError, RecoverableCameraError
 from .edsdk import (
     EDSDKError,
@@ -22,6 +20,7 @@ from .edsdk import (
     get_sdk,
     kEdsCameraCommand_ExtendShutDownTimer,
     kEdsCameraCommand_PressShutterButton,
+    kEdsCameraCommand_TakePicture,
     kEdsCameraCommand_ShutterButton_Completely,
     kEdsCameraCommand_ShutterButton_Completely_NonAF,
     kEdsCameraCommand_ShutterButton_Halfway,
@@ -193,29 +192,51 @@ class CanonCameraBackend(CameraBackend):
 
         self._ensure_remote_ready()
         try:
-            self._auto_focus()
+            focus_ok = False
+            try:
+                self._auto_focus()
+                focus_ok = True
+            except Exception:
+                logger.warning("Canon autofocus step failed; continuing with direct release fallback", exc_info=True)
+
+            with self._op_lock:
+                self._clear_transfer_queue()
+
+            button_param = (
+                kEdsCameraCommand_ShutterButton_Completely
+                if focus_ok
+                else kEdsCameraCommand_ShutterButton_Completely_NonAF
+            )
+
+            def _press(param: int) -> None:
+                self._sdk.send_command(self._camera_ref, kEdsCameraCommand_PressShutterButton, int(param))
+
+            def _take_picture() -> None:
+                self._sdk.send_command(self._camera_ref, kEdsCameraCommand_TakePicture, 0)
+
             with self._op_lock:
                 try:
-                    self._retry(
-                        lambda: self._sdk.send_command(
-                            self._camera_ref,
-                            kEdsCameraCommand_PressShutterButton,
-                            kEdsCameraCommand_ShutterButton_Completely,
-                        ),
-                        retries=5,
-                        delay_s=0.12,
-                    )
+                    if self._prefer_direct_take_picture():
+                        try:
+                            self._retry(_take_picture, retries=3, delay_s=0.15)
+                        except EDSDKError:
+                            self._retry(lambda: _press(button_param), retries=5, delay_s=0.12)
+                    else:
+                        self._retry(
+                            lambda: _press(button_param),
+                            retries=5,
+                            delay_s=0.12,
+                        )
                 except EDSDKError as exc:
                     if int(exc.code) == int(EDS_ERR_TAKE_PICTURE_AF_NG):
-                        self._retry(
-                            lambda: self._sdk.send_command(
-                                self._camera_ref,
-                                kEdsCameraCommand_PressShutterButton,
-                                kEdsCameraCommand_ShutterButton_Completely_NonAF,
-                            ),
-                            retries=2,
-                            delay_s=0.15,
-                        )
+                        try:
+                            self._retry(_take_picture, retries=2, delay_s=0.15)
+                        except EDSDKError:
+                            self._retry(
+                                lambda: _press(kEdsCameraCommand_ShutterButton_Completely_NonAF),
+                                retries=2,
+                                delay_s=0.15,
+                            )
                     else:
                         raise
                 finally:
@@ -336,10 +357,8 @@ class CanonCameraBackend(CameraBackend):
             return None
         camera_sequence = self._extract_camera_sequence(filename)
 
-        preview_data = None
-        image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if image is not None:
-            preview_data = data
+        suffix = Path(filename).suffix.lower()
+        preview_data = preview_bytes_from_data(data, suffix=suffix)
 
         return CapturePayload(
             data=data,
@@ -383,6 +402,10 @@ class CanonCameraBackend(CameraBackend):
                     self._sdk.release_ref(stale_ref)
                 except Exception:
                     pass
+
+    def _prefer_direct_take_picture(self) -> bool:
+        name = self._device_description.upper()
+        return "EOS R" in name
 
     def _mark_runtime_failure(self, message: str, exc: Exception) -> None:
         self._dispose_session()

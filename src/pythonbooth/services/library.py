@@ -18,7 +18,16 @@ from ..models import (
     new_photo_id,
 )
 from .atomic_io import atomic_write_json
-from .image_utils import build_thumbnail, suffix_from_filename
+from .image_utils import (
+    build_thumbnail,
+    encode_qimage_to_jpeg_bytes,
+    extract_orientation_from_data,
+    load_preview_image,
+    preview_bytes_from_data,
+    preview_image_from_data,
+    save_bytes,
+    suffix_from_filename,
+)
 
 
 FilenameBuilder = Callable[[CapturePayload, int], str]
@@ -104,9 +113,59 @@ class SessionLibrary:
             if not file_path.exists():
                 changed_records = True
                 continue
+            if record.is_raw:
+                preview_path = self.previews_dir / f"{Path(record.display_name).stem}_preview.jpg"
+                with file_path.open("rb") as handle:
+                    header_bytes = handle.read(4 * 1024 * 1024)
+                expected_portrait = self._expected_orientation_is_portrait(header_bytes, file_path.suffix)
+                preview_needs_rebuild = not preview_path.exists()
+                if not preview_needs_rebuild and expected_portrait is not None:
+                    preview_image = load_preview_image(preview_path)
+                    if preview_image.isNull():
+                        preview_needs_rebuild = True
+                    else:
+                        preview_needs_rebuild = (preview_image.height() > preview_image.width()) != expected_portrait
+
+                if preview_needs_rebuild:
+                    try:
+                        preview_image = preview_image_from_data(file_path.read_bytes(), suffix=file_path.suffix)
+                    except Exception:
+                        preview_image = None
+                    if preview_image is not None and not preview_image.isNull():
+                        save_bytes(preview_path, encode_qimage_to_jpeg_bytes(preview_image))
+                    elif preview_path.exists():
+                        preview_path.unlink()
+
+                if preview_path.exists():
+                    if record.preview_path != str(preview_path):
+                        record.preview_path = str(preview_path)
+                        changed_records = True
+                elif record.preview_path:
+                    record.preview_path = None
+                    changed_records = True
+
+                thumb_path = Path(record.thumbnail_path) if record.thumbnail_path else self.thumbs_dir / f"{Path(record.display_name).stem}.jpg"
+                thumb_source = Path(record.preview_path) if record.preview_path else file_path
+                if preview_needs_rebuild or not thumb_path.exists():
+                    build_thumbnail(thumb_source, thumb_path)
+                if record.thumbnail_path != str(thumb_path):
+                    record.thumbnail_path = str(thumb_path)
+                    changed_records = True
+                valid_records.append(record)
+                continue
             if record.preview_path and not Path(record.preview_path).exists():
                 record.preview_path = None
                 changed_records = True
+            if record.preview_path is None and file_path.suffix.lower() in {".cr2", ".cr3", ".raw"}:
+                try:
+                    preview_bytes = preview_bytes_from_data(file_path.read_bytes(), suffix=file_path.suffix)
+                except Exception:
+                    preview_bytes = None
+                if preview_bytes:
+                    preview_path = self.previews_dir / f"{Path(record.display_name).stem}_preview.jpg"
+                    save_bytes(preview_path, preview_bytes)
+                    record.preview_path = str(preview_path)
+                    changed_records = True
             thumb_source = Path(record.preview_path) if record.preview_path else file_path
             thumb_path = Path(record.thumbnail_path) if record.thumbnail_path else self.thumbs_dir / f"{Path(record.display_name).stem}.jpg"
             if not thumb_path.exists():
@@ -297,3 +356,10 @@ class SessionLibrary:
             candidate = f"{stem}_{index:02d}{suffix}"
             index += 1
         return candidate
+
+    @staticmethod
+    def _expected_orientation_is_portrait(data: bytes, suffix: str) -> bool | None:
+        orientation = extract_orientation_from_data(data, suffix=suffix)
+        if orientation is None:
+            return None
+        return orientation in {5, 6, 7, 8}
