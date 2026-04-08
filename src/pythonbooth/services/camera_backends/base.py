@@ -6,6 +6,18 @@ from typing import Iterable
 from ...models import CapturePayload, CameraStatus
 
 
+class CameraBackendError(RuntimeError):
+    pass
+
+
+class RecoverableCameraError(CameraBackendError):
+    pass
+
+
+class FatalCameraError(CameraBackendError):
+    pass
+
+
 class CameraBackend(abc.ABC):
     backend_id = "base"
     display_name = "Base"
@@ -35,6 +47,13 @@ class CameraBackend(abc.ABC):
 
     def list_available_cameras(self) -> list[str]:
         return []
+
+    def is_healthy(self) -> bool:
+        return self._connected
+
+    def reset_connection(self) -> CameraStatus:
+        self.disconnect()
+        return self.connect()
 
     @property
     def connected(self) -> bool:

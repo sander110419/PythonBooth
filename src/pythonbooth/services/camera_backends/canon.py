@@ -11,7 +11,8 @@ import cv2
 import numpy as np
 
 from ...models import CapturePayload, CameraStatus
-from .base import CameraBackend
+from ..canon_guidance import build_canon_access_help
+from .base import CameraBackend, FatalCameraError, RecoverableCameraError
 from .edsdk import (
     EDSDKError,
     EDS_ERR_DEVICE_BUSY,
@@ -92,6 +93,7 @@ class CanonCameraBackend(CameraBackend):
 
     def connect(self) -> CameraStatus:
         try:
+            self._dispose_session()
             self._sdk = get_sdk(self._sdk_path)
             cameras = self._sdk.get_camera_list()
             if not cameras:
@@ -128,6 +130,30 @@ class CanonCameraBackend(CameraBackend):
                 available_cameras=self.list_available_cameras(),
             )
             return self._status
+        except EDSDKError as exc:
+            logger.exception("Canon connect failed with EDSDK error")
+            self._connected = False
+            if self._is_access_conflict(exc):
+                self._status = CameraStatus(
+                    backend=self.backend_id,
+                    connected=False,
+                    state="error",
+                    message="Canon camera is busy or in file-transfer mode",
+                    camera_name=self._device_description,
+                    last_error=build_canon_access_help(),
+                    recoverable=True,
+                )
+            else:
+                self._status = CameraStatus(
+                    backend=self.backend_id,
+                    connected=False,
+                    state="error",
+                    message="Failed to connect Canon camera",
+                    camera_name=self._device_description,
+                    last_error=str(exc),
+                )
+            self._dispose_session()
+            return self._status
         except FileNotFoundError as exc:
             self._connected = False
             self._status = CameraStatus(
@@ -148,28 +174,18 @@ class CanonCameraBackend(CameraBackend):
                 message="Failed to connect Canon camera",
                 last_error=str(exc),
             )
-            self.disconnect()
+            self._dispose_session()
             return self._status
 
     def disconnect(self) -> None:
-        if not self._sdk or not self._camera_ref:
-            self._connected = False
-            return
-        try:
-            self._sdk.close_session(self._camera_ref)
-        except Exception:
-            pass
-        try:
-            self._sdk.release_ref(self._camera_ref)
-        except Exception:
-            pass
-        self._camera_ref = None
-        self._connected = False
-        self._remote_ready = False
+        self._dispose_session()
         self._status = CameraStatus.idle(self.backend_id, "Canon disconnected")
 
     def status(self) -> CameraStatus:
         return self._status
+
+    def is_healthy(self) -> bool:
+        return self._connected and self._sdk is not None and self._camera_ref is not None
 
     def request_capture(self) -> None:
         if not self._connected or not self._sdk or not self._camera_ref:
@@ -224,9 +240,10 @@ class CanonCameraBackend(CameraBackend):
         with self._op_lock:
             try:
                 self._keep_alive()
-                self._sdk.pump_events()
-            except Exception:
-                return []
+                self._retry(lambda: self._sdk.pump_events(), retries=3, delay_s=0.05)
+            except Exception as exc:
+                self._mark_runtime_failure("Lost Canon session while polling", exc)
+                raise RecoverableCameraError(str(exc)) from exc
 
         captures: list[CapturePayload] = []
         while not self._transfer_queue.empty():
@@ -238,6 +255,8 @@ class CanonCameraBackend(CameraBackend):
                 capture = self._download_capture(dir_item_ref)
                 if capture is not None:
                     captures.append(capture)
+            except Exception:
+                logger.exception("Failed to download one Canon capture item")
             finally:
                 try:
                     self._sdk.release_ref(dir_item_ref)
@@ -307,10 +326,7 @@ class CanonCameraBackend(CameraBackend):
         now = time.time()
         if now - self._last_keepalive < 15.0:
             return
-        try:
-            self._sdk.send_command(self._camera_ref, kEdsCameraCommand_ExtendShutDownTimer, 0)
-        except Exception:
-            pass
+        self._retry(lambda: self._sdk.send_command(self._camera_ref, kEdsCameraCommand_ExtendShutDownTimer, 0), retries=3, delay_s=0.05)
         self._last_keepalive = now
 
     def _download_capture(self, dir_item_ref) -> CapturePayload | None:
@@ -338,3 +354,49 @@ class CanonCameraBackend(CameraBackend):
     def _extract_camera_sequence(filename: str) -> int | None:
         match = re.search(r"(\d{3,})", Path(filename).stem)
         return int(match.group(1)) if match else None
+
+    def _dispose_session(self) -> None:
+        self._clear_transfer_queue()
+        if self._sdk and self._camera_ref:
+            try:
+                self._sdk.close_session(self._camera_ref)
+            except Exception:
+                pass
+            try:
+                self._sdk.release_ref(self._camera_ref)
+            except Exception:
+                pass
+        self._camera_ref = None
+        self._connected = False
+        self._remote_ready = False
+        self._last_keepalive = 0.0
+        self._sdk = None
+
+    def _clear_transfer_queue(self) -> None:
+        while not self._transfer_queue.empty():
+            try:
+                stale_ref = self._transfer_queue.get_nowait()
+            except Empty:
+                break
+            if self._sdk:
+                try:
+                    self._sdk.release_ref(stale_ref)
+                except Exception:
+                    pass
+
+    def _mark_runtime_failure(self, message: str, exc: Exception) -> None:
+        self._dispose_session()
+        guidance = build_canon_access_help() if isinstance(exc, EDSDKError) and self._is_access_conflict(exc) else str(exc)
+        self._status = CameraStatus(
+            backend=self.backend_id,
+            connected=False,
+            state="error",
+            message=message,
+            camera_name=self._device_description,
+            last_error=guidance,
+            recoverable=True,
+        )
+
+    @staticmethod
+    def _is_access_conflict(exc: EDSDKError) -> bool:
+        return int(exc.code) in {EDS_ERR_DEVICE_BUSY, EDS_ERR_PTP_DEVICE_BUSY, EDS_ERR_OBJECT_NOTREADY}

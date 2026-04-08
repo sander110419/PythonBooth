@@ -12,6 +12,7 @@
 - [x] Add secondary display windows, hot-folder import, shortcuts, and session utilities
 - [x] Run automated tests and repeated application smoke tests
 - [x] Fix runtime issues found during testing and document remaining limitations
+- [x] Add crash recovery, durable capture jobs, backup writing, diagnostics export, preflight validation, and resilient camera reconnects
 
 ## Log
 
@@ -28,6 +29,12 @@
 - 2026-04-07: Verified the new UI with `python -m compileall src main.py tests`, `QT_QPA_PLATFORM=offscreen PYTHONPATH=src python -m pytest -q` -> `6 passed`, offscreen app launch, and a simulator capture smoke test after opening the options dialog (`photos=1`).
 - 2026-04-07: Added bundled Canon EDSDK assets under `canon-sdk/` from `/home/sander/Downloads/edsdk/`, including Linux `x86_64` `libEDSDK.so` and Windows DLL/lib files.
 - 2026-04-07: Verified the Canon loader resolves the bundled SDK and that startup now reaches `No Canon camera detected` instead of `Canon SDK not found` when no camera is attached.
+- 2026-04-08: Added atomic JSON/file writes, `session_state.json`, `jobs.json`, a durable `CapturePipeline`, backup-target mirroring with verification, diagnostics bundle export, and preflight validation for storage, naming, SDK, hot-folder, and disk checks.
+- 2026-04-08: Hardened `CameraManager` with reconnect backoff, degraded/retrying states, poll-failure thresholds, and explicit recovery when a backend poll loop stops being healthy.
+- 2026-04-08: Added crash-safe session restoration by reopening the last dirty session, replaying unfinished capture jobs on launch, persisting current session pointers in config, and keeping camera/session snapshots on disk while the app runs.
+- 2026-04-08: Verified the reliability pass with `python -m compileall src main.py tests`, `python -m pytest -q` -> `19 passed`, and `QT_QPA_PLATFORM=offscreen PYTHONPATH=src python main.py --demo --auto-exit-ms 1200`.
+- 2026-04-08: Added an offscreen recovery smoke test that simulated an unclean exit after a capture and confirmed the next launch restored the same session with the captured photo intact (`restored=True photos=1`).
+- 2026-04-08: Added Canon-specific tethering guidance so busy/file-transfer connection failures now point operators to `[Choose USB connection app] -> [Photo Import/Remote Control]`, Wi-Fi-off, direct-USB, and Linux auto-mount conflict checks. Added a matching preflight warning and regression coverage.
 
 ## Remaining limitation
 

@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QFileDialog,
     QPushButton,
     QStatusBar,
     QToolButton,
@@ -23,9 +24,12 @@ from PyQt6.QtWidgets import (
 from ..config import AppConfig, ConfigStore
 from ..models import CapturePayload, CameraStatus
 from ..services.camera_manager import CameraManager
+from ..services.capture_pipeline import CapturePipeline
+from ..services.diagnostics import export_diagnostics_bundle
 from ..services.hot_folder import HotFolderWatcher
 from ..services.library import SessionLibrary
 from ..services.naming import NamingContext, compile_filename, sanitize_filename_part
+from ..services.preflight import run_preflight
 from .options_dialog import OptionsDialog
 from .secondary_window import SecondaryDisplayWindow
 from .timeline import TimelineWidget
@@ -41,9 +45,13 @@ class MainWindow(QMainWindow):
         self.config = config
         self.secondary_windows: list[SecondaryDisplayWindow] = []
         self.selected_photo_id = config.selected_photo_id or ""
+        self.last_camera_status = CameraStatus.idle(config.backend, f"{config.backend.title()} ready")
+        self.last_preflight_report = None
+        self._restored_previous_session = False
 
         self.session_id = ""
-        self.session_library = self._create_session_library(config.session_name)
+        self.session_library = self._open_or_create_session_library()
+        self.capture_pipeline = self._create_capture_pipeline()
         self.hot_folder = HotFolderWatcher()
         self.hot_folder.set_folder(config.hot_folder_path if config.hot_folder_enabled else None)
 
@@ -61,11 +69,18 @@ class MainWindow(QMainWindow):
         self.selected_viewer.set_zoom_enabled(self.config.zoom_enabled)
         self._bind_shortcuts()
         self._bind_signals()
+        recovered_records = self.capture_pipeline.recover_pending_jobs(self._build_filename)
+        if recovered_records:
+            self.selected_photo_id = recovered_records[-1].id
+        elif self.session_library.state.selected_photo_id:
+            self.selected_photo_id = self.session_library.state.selected_photo_id
         self._refresh_timeline()
         self._update_selected_preview()
         self._update_filename_preview()
         self._update_session_labels()
         self._apply_status(CameraStatus.idle(self.config.backend, f"{self.config.backend.title()} ready"))
+        self._run_preflight(show_dialog=False)
+        self._persist_config()
 
         self.hot_folder_timer = QTimer(self)
         self.hot_folder_timer.setInterval(1200)
@@ -74,8 +89,13 @@ class MainWindow(QMainWindow):
 
         self.camera_manager.start()
         self.camera_manager.switch_backend(self.config.backend)
+        if self._restored_previous_session:
+            self.status_message(f"Recovered previous session {self.session_id}")
 
     def closeEvent(self, event) -> None:
+        pending_summary = self.capture_pipeline.queue_summary()
+        keep_recovery_flag = pending_summary["pending"] > 0 or pending_summary["failed"] > 0
+        self.session_library.mark_needs_recovery(needs_recovery=keep_recovery_flag, last_error=self.session_library.state.last_error)
         self._persist_config()
         self.camera_manager.stop()
         super().closeEvent(event)
@@ -128,8 +148,13 @@ class MainWindow(QMainWindow):
         self.options_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.options_menu = QMenu(self.options_button)
         self.options_action = QAction("Booth Options", self)
+        self.preflight_action = QAction("Run Preflight", self)
+        self.diagnostics_action = QAction("Export Diagnostics", self)
         self.open_folder_action = QAction("Open Session Folder", self)
         self.options_menu.addAction(self.options_action)
+        self.options_menu.addAction(self.preflight_action)
+        self.options_menu.addAction(self.diagnostics_action)
+        self.options_menu.addSeparator()
         self.options_menu.addAction(self.open_folder_action)
         self.options_button.setMenu(self.options_menu)
 
@@ -263,6 +288,8 @@ class MainWindow(QMainWindow):
         self.new_session_button.clicked.connect(self._start_new_session)
         self.new_display_button.clicked.connect(self._create_secondary_window)
         self.options_action.triggered.connect(self._open_options_dialog)
+        self.preflight_action.triggered.connect(lambda: self._run_preflight(show_dialog=True))
+        self.diagnostics_action.triggered.connect(self._export_diagnostics)
         self.open_folder_action.triggered.connect(self._open_session_folder)
 
         self.zoom_toggle.toggled.connect(self.selected_viewer.set_zoom_enabled)
@@ -277,11 +304,14 @@ class MainWindow(QMainWindow):
         self.timeline.delete_requested.connect(self._delete_photo_by_id)
 
     def _apply_status(self, status: CameraStatus) -> None:
+        self.last_camera_status = status
+        self.session_library.set_camera_status(status)
         self.camera_info_label.setText(status.message if not status.last_error else f"{status.message} | {status.last_error}")
         self.status_pill.setText(status.state.title())
         self.status_pill.setProperty("statusState", status.state)
         self.status_pill.style().unpolish(self.status_pill)
         self.status_pill.style().polish(self.status_pill)
+        self.capture_button.setEnabled(status.connected or self.config.backend == "simulator")
         self.status_message(status.message)
 
     def _open_options_dialog(self) -> None:
@@ -305,6 +335,9 @@ class MainWindow(QMainWindow):
             updated.get("simulator_auto_capture_seconds", self.config.simulator_auto_capture_seconds)
         )
         self.config.edsdk_path = str(updated.get("edsdk_path", self.config.edsdk_path))
+        self.config.backup_roots = list(updated.get("backup_roots", self.config.backup_roots))
+        self.config.verify_backup_writes = bool(updated.get("verify_backup_writes", self.config.verify_backup_writes))
+        self.config.restore_last_session = bool(updated.get("restore_last_session", self.config.restore_last_session))
 
         self.hot_folder.set_folder(self.config.hot_folder_path if self.config.hot_folder_enabled else None)
         self.camera_manager.update_runtime_options(
@@ -312,11 +345,17 @@ class MainWindow(QMainWindow):
             simulator_auto_capture_seconds=self.config.simulator_auto_capture_seconds,
             edsdk_path=self.config.edsdk_path,
         )
+        self.capture_pipeline.update_settings(
+            backup_roots=self.config.backup_roots,
+            verify_backup_writes=self.config.verify_backup_writes,
+        )
         if previous_backend != self.config.backend:
             self.camera_manager.switch_backend(self.config.backend)
 
+        self.session_library.update_context(self.session_id, self.config)
         self._update_filename_preview()
         self._update_session_labels()
+        self._run_preflight(show_dialog=False)
         self._persist_config()
 
         if previous_session_name != self.config.session_name:
@@ -328,12 +367,14 @@ class MainWindow(QMainWindow):
             self.status_message("Options saved.")
 
     def _on_capture_ready(self, capture: CapturePayload) -> None:
-        record = self.session_library.add_capture(capture, self._build_filename)
+        record = self.capture_pipeline.process_capture(capture, self._build_filename)
         self.selected_photo_id = record.id
+        self.session_library.set_selected_photo(record.id)
         self._refresh_timeline(record.id)
         self._update_selected_preview()
         self._update_filename_preview()
         self._update_session_labels()
+        self._persist_config()
         self.status_message(f"Imported {record.display_name}")
 
     def _build_filename(self, capture: CapturePayload, session_sequence: int) -> str:
@@ -362,6 +403,7 @@ class MainWindow(QMainWindow):
 
     def _select_photo(self, photo_id: str) -> None:
         self.selected_photo_id = photo_id
+        self.session_library.set_selected_photo(photo_id)
         self._update_selected_preview()
         self._update_filename_preview()
         self._persist_config()
@@ -425,20 +467,29 @@ class MainWindow(QMainWindow):
     def _update_session_labels(self) -> None:
         count = len(self.session_library.records)
         series_name = self.config.session_name.strip() or "Untitled"
+        queue = self.capture_pipeline.queue_summary()
+        queue_text = f"Queue pending: {queue['pending']} | failed: {queue['failed']} | warnings: {queue['warnings']}"
         self.session_stats_label.setText(
-            f"{count} photo{'s' if count != 1 else ''}\nCurrent session: {self.session_id}\nFolder: {self.session_library.session_root}"
+            f"{count} photo{'s' if count != 1 else ''}\nCurrent session: {self.session_id}\n{queue_text}\nFolder: {self.session_library.session_root}"
         )
         self.session_path_label.setText(
             f"Series preset: {series_name} | Current session: {self.session_id}"
         )
 
     def _start_new_session(self) -> None:
+        self.session_library.mark_needs_recovery(needs_recovery=False)
         self.session_library = self._create_session_library(self.config.session_name.strip() or "Session")
+        self.capture_pipeline = self._create_capture_pipeline()
+        self.session_library.update_context(self.session_id, self.config)
+        self.session_library.mark_needs_recovery(needs_recovery=True)
         self.selected_photo_id = ""
+        self.session_library.set_selected_photo("")
         self._refresh_timeline()
         self._update_selected_preview()
         self._update_filename_preview()
         self._update_session_labels()
+        self._run_preflight(show_dialog=False)
+        self._persist_config()
         self.status_message(f"Started new session {self.session_id}")
 
     def _create_session_library(self, session_name: str) -> SessionLibrary:
@@ -446,7 +497,31 @@ class MainWindow(QMainWindow):
         self.session_id = f"{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         session_root = self.config.resolved_output_root() / self.session_id
         session_root.mkdir(parents=True, exist_ok=True)
-        return SessionLibrary(session_root)
+        library = SessionLibrary(session_root)
+        library.update_context(self.session_id, self.config)
+        library.mark_needs_recovery(needs_recovery=True)
+        return library
+
+    def _open_or_create_session_library(self) -> SessionLibrary:
+        if self.config.restore_last_session and self.config.last_session_root:
+            last_root = Path(self.config.last_session_root).expanduser()
+            if last_root.exists():
+                library = SessionLibrary(last_root)
+                if library.state.needs_recovery:
+                    self.session_id = library.state.session_id or last_root.name
+                    self.selected_photo_id = library.state.selected_photo_id or self.selected_photo_id
+                    self._restored_previous_session = True
+                    library.update_context(self.session_id, self.config)
+                    library.mark_needs_recovery(needs_recovery=True, last_error=library.state.last_error)
+                    return library
+        return self._create_session_library(self.config.session_name)
+
+    def _create_capture_pipeline(self) -> CapturePipeline:
+        return CapturePipeline(
+            self.session_library,
+            backup_roots=self.config.backup_roots,
+            verify_backup_writes=self.config.verify_backup_writes,
+        )
 
     def _create_secondary_window(self) -> None:
         window = SecondaryDisplayWindow(self)
@@ -468,10 +543,12 @@ class MainWindow(QMainWindow):
             return
         self.session_library.delete_photo(photo_id)
         self.selected_photo_id = self.session_library.records[-1].id if self.session_library.records else ""
+        self.session_library.set_selected_photo(self.selected_photo_id)
         self._refresh_timeline(self.selected_photo_id or None)
         self._update_selected_preview()
         self._update_filename_preview()
         self._update_session_labels()
+        self._persist_config()
 
     def _open_session_folder(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.session_library.session_root)))
@@ -482,20 +559,62 @@ class MainWindow(QMainWindow):
         imported = self.hot_folder.scan()
         for path in imported:
             try:
-                record = self.session_library.import_existing_file(path, self._build_filename)
+                record = self.capture_pipeline.process_existing_file(path, self._build_filename)
             except Exception:
                 logger.exception("Failed to import hot-folder file %s", path)
                 continue
             self.selected_photo_id = record.id
+            self.session_library.set_selected_photo(record.id)
             self._refresh_timeline(record.id)
             self._update_selected_preview()
             self._update_filename_preview()
             self._update_session_labels()
+            self._persist_config()
             self.status_message(f"Imported hot-folder image {record.display_name}")
+
+    def _run_preflight(self, *, show_dialog: bool) -> None:
+        self.last_preflight_report = run_preflight(
+            config=self.config,
+            session_library=self.session_library,
+            camera_status=self.last_camera_status,
+        )
+        if not show_dialog:
+            if self.last_preflight_report.overall_status != "pass":
+                self.status_message(
+                    f"Preflight: {len(self.last_preflight_report.failed)} failed, {len(self.last_preflight_report.warnings)} warning(s)"
+                )
+            return
+
+        lines = [f"Overall status: {self.last_preflight_report.overall_status.title()}"]
+        for check in self.last_preflight_report.checks:
+            detail = f"\n{check.details}" if check.details else ""
+            lines.append(f"[{check.severity.upper()}] {check.name}: {check.message}{detail}")
+        QMessageBox.information(self, "Preflight Report", "\n\n".join(lines))
+
+    def _export_diagnostics(self) -> None:
+        suggested = self.session_library.session_root / f"pythonbooth_diagnostics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        filename, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export diagnostics bundle",
+            str(suggested),
+            "Zip Archive (*.zip)",
+        )
+        if not filename:
+            return
+        bundle = export_diagnostics_bundle(
+            Path(filename),
+            config=self.config,
+            session_library=self.session_library,
+            camera_status=self.last_camera_status,
+            preflight_report=self.last_preflight_report,
+        )
+        self.status_message(f"Diagnostics exported to {bundle.name}")
 
     def _persist_config(self) -> None:
         self.config.selected_photo_id = self.selected_photo_id
         self.config.zoom_enabled = self.zoom_toggle.isChecked()
+        self.config.last_session_root = str(self.session_library.session_root)
+        self.config.last_session_id = self.session_id
         self.config_store.save(self.config)
 
     def status_message(self, message: str) -> None:

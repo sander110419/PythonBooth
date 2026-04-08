@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -103,7 +104,7 @@ class OptionsDialog(QDialog):
                 color: #90a0b9;
                 font-weight: 400;
             }
-            QLineEdit, QComboBox, QSpinBox {
+            QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {
                 background: rgba(255, 255, 255, 0.05);
                 border: 1px solid rgba(175, 190, 216, 0.18);
                 border-radius: 12px;
@@ -159,6 +160,10 @@ class OptionsDialog(QDialog):
         self.auto_reconnect_check.setChecked(True)
         layout.addWidget(self.auto_reconnect_check)
 
+        self.restore_last_session_check = QCheckBox("Restore last active session after a crash")
+        self.restore_last_session_check.setChecked(True)
+        layout.addWidget(self.restore_last_session_check)
+
         self.sim_capture_spin = QSpinBox()
         self.sim_capture_spin.setRange(0, 60)
         self.sim_capture_spin.setSuffix(" s")
@@ -192,12 +197,24 @@ class OptionsDialog(QDialog):
         self.sdk_browse_button.clicked.connect(self._browse_sdk_path)
         self.sdk_row = self._path_row(self.sdk_path_edit, self.sdk_browse_button)
 
+        self.backup_roots_edit = QPlainTextEdit()
+        self.backup_roots_edit.setPlaceholderText("One backup folder per line")
+        self.backup_roots_edit.setFixedHeight(90)
+        self.backup_browse_button = QPushButton("Add Folder")
+        self.backup_browse_button.clicked.connect(self._browse_backup_folder)
+        self.backup_row = self._path_row(self.backup_roots_edit, self.backup_browse_button)
+
+        self.verify_backups_check = QCheckBox("Verify backup copies after writing")
+        self.verify_backups_check.setChecked(True)
+
         layout.addRow(self.hot_folder_check)
         layout.addRow("Hot folder", self.hot_folder_row)
+        layout.addRow("Backup folders", self.backup_row)
+        layout.addRow(self.verify_backups_check)
         layout.addRow("Canon SDK path", self.sdk_row)
         return group
 
-    def _path_row(self, edit: QLineEdit, button: QPushButton) -> QWidget:
+    def _path_row(self, edit: QWidget, button: QPushButton) -> QWidget:
         widget = QWidget()
         row = QHBoxLayout(widget)
         row.setContentsMargins(0, 0, 0, 0)
@@ -216,6 +233,15 @@ class OptionsDialog(QDialog):
         folder = QFileDialog.getExistingDirectory(self, "Select Canon SDK folder", self.sdk_path_edit.text() or str(Path.home()))
         if folder:
             self.sdk_path_edit.setText(folder)
+
+    def _browse_backup_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Select backup folder", str(Path.home()))
+        if not folder:
+            return
+        existing = [line.strip() for line in self.backup_roots_edit.toPlainText().splitlines() if line.strip()]
+        if folder not in existing:
+            existing.append(folder)
+        self.backup_roots_edit.setPlainText("\n".join(existing))
 
     def _update_hot_folder_enabled_state(self, enabled: bool) -> None:
         self.hot_folder_edit.setEnabled(enabled)
@@ -236,6 +262,9 @@ class OptionsDialog(QDialog):
         self.hot_folder_edit.setText(str(options.get("hot_folder_path", "")))
         self.sim_capture_spin.setValue(int(float(options.get("simulator_auto_capture_seconds", 0) or 0)))
         self.sdk_path_edit.setText(str(options.get("edsdk_path", "")))
+        self.backup_roots_edit.setPlainText("\n".join(str(item).strip() for item in options.get("backup_roots", []) if str(item).strip()))
+        self.verify_backups_check.setChecked(bool(options.get("verify_backup_writes", True)))
+        self.restore_last_session_check.setChecked(bool(options.get("restore_last_session", True)))
         self._update_hot_folder_enabled_state(self.hot_folder_check.isChecked())
 
     def set_from_config(self, config: AppConfig) -> None:
@@ -251,6 +280,9 @@ class OptionsDialog(QDialog):
                 "hot_folder_path": config.hot_folder_path,
                 "simulator_auto_capture_seconds": config.simulator_auto_capture_seconds,
                 "edsdk_path": config.edsdk_path,
+                "backup_roots": list(config.backup_roots),
+                "verify_backup_writes": config.verify_backup_writes,
+                "restore_last_session": config.restore_last_session,
             }
         )
 
@@ -266,5 +298,7 @@ class OptionsDialog(QDialog):
             "hot_folder_path": self.hot_folder_edit.text().strip(),
             "simulator_auto_capture_seconds": float(self.sim_capture_spin.value()),
             "edsdk_path": self.sdk_path_edit.text().strip(),
+            "backup_roots": [line.strip() for line in self.backup_roots_edit.toPlainText().splitlines() if line.strip()],
+            "verify_backup_writes": self.verify_backups_check.isChecked(),
+            "restore_last_session": self.restore_last_session_check.isChecked(),
         }
-

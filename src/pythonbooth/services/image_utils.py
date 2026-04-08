@@ -7,6 +7,8 @@ import numpy as np
 from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt
 from PyQt6.QtGui import QImage
 
+from .atomic_io import atomic_write_bytes
+
 
 SUPPORTED_IMPORT_SUFFIXES = {
     ".jpg",
@@ -52,8 +54,7 @@ def suffix_from_filename(filename: str, fallback: str = ".jpg") -> str:
 
 
 def save_bytes(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+    atomic_write_bytes(path, data)
 
 
 def build_thumbnail(source_path: Path, thumb_path: Path, size: QSize = QSize(220, 160)) -> Path:

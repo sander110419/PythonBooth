@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .paths import config_dir, default_session_root, ensure_app_dirs
+from .services.atomic_io import atomic_write_json
 
 
 @dataclass(slots=True)
@@ -21,6 +22,11 @@ class AppConfig:
     auto_reconnect: bool = True
     simulator_auto_capture_seconds: float = 0.0
     edsdk_path: str = ""
+    backup_roots: list[str] = field(default_factory=list)
+    verify_backup_writes: bool = True
+    last_session_root: str = ""
+    last_session_id: str = ""
+    restore_last_session: bool = True
     secondary_windows: list[dict[str, object]] = field(default_factory=list)
     selected_photo_id: str = ""
     zoom_enabled: bool = False
@@ -47,5 +53,4 @@ class ConfigStore:
 
     def save(self, config: AppConfig) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as handle:
-            json.dump(asdict(config), handle, indent=2)
+        atomic_write_json(self.path, asdict(config), indent=2)
